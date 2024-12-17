@@ -1,0 +1,1741 @@
+---
+title: "RNA FISH Probes Design"
+author: ""
+output:
+  html_document: 
+    toc: yes
+    highlight: haddock
+    number_sections: yes
+    theme: paper
+  pdf_document:
+    toc: yes           # 显示目录
+    number_sections: true  # 为 PDF 输出添加标题编号
+---
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(knitr)
+library(kableExtra)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, results = 'hold')
+```
+
+# Abstract
+
+-   参考代码：<https://bitbucket.org/muellerflorian/fish_quant/src/master/Oligostan/Oligostan.r>
+
+-   推荐在Linux的Rstudio 上运行，在Windows的Rstudio不能使用RepeatMasker过滤器。
+
+-   在Windows，设置RepeatMasker =False，后可以手动把FASTA文件上传到网站进行RepeatMasker
+
+-   简略流程图如下
+
+    ![](%E5%9B%BE%E7%89%876.png){width="672"}
+
+# Per Setting
+
+## Input and Output
+
+```{r}
+# FASTA Sequences: file name
+# IMPORTANT : NO UNDERSCORES IN FILE-Name and sequence names in FASTA FILE!
+FileNameFasta <- 'TERC.fasta'
+
+# FASTA Sequences: path   [no '/' at the end of the path name]
+# WINDOWS IMPORTANT: Replace the separators in the path name \ by /
+PathNameFasta <- '.'
+
+# Output directory and file names: generated automatically
+name_base <-strsplit(FileNameFasta, "[.]")[[1]][1]
+FileNameOutput <- paste('Probes_',name_base,sep="")
+
+FileNameFasta
+FileNameOutput
+```
+
+## dG37
+
+-   dG37 是指在 37 摄氏度下的ΔG（吉布斯自由能变）。
+
+-   ΔG 是一个热力学参数，用来描述化学反应或物理过程（如核酸双链的形成或解离）中的自由能变化。
+
+-   对于核酸（如DNA或RNA）的杂交过程，ΔG 是指当两个互补的核酸序列配对形成双链时的能量变化
+
+-   一个负的ΔG37 值（例如-32）意味着形成双链的过程是自发的且有利的，数值越负，形成双链的过程越稳定。
+
+-   **自定义期望dG37：期望dG37要根据探针长度来设置，要注意不同长度的探针dG37值差别很多**
+
+```{r}
+# Uncomment next line if you want to use a specific dG37 (ex:-32)
+# dG37Desiree <- -32
+
+# dG37 probes Minimum score
+ScoreMin <- 0.9
+```
+
+## Ensemblformat
+
+-   Ensemblformat的fasta开头包含基因ID (`ENSG`)、转录本ID (`ENST`) 或蛋白质ID (`ENSP`)
+
+![](1725009483742.png){width="500"}
+
+```{r}
+# Use Ensemblformat to resolve multiple transcripts possibilities (sequence name must respect ENSEMBL Id)
+EnsemblFormat <- TRUE
+```
+
+## probes length
+
+```{r}
+# probes maximum length [default 32]
+TailleSondeMax <- 32
+
+# probes minimum length [default 26]
+TailleSondeMin <- 26
+```
+
+## Two probes gap
+
+```{r}
+# mimimum number of nucleotides between two probes (end to start positions)
+DistanceMinInterSonde <- 2
+```
+
+## PNAS filter setting
+
+PNAS过滤器的作用是应用一组预定义的规则来筛选候选探针，这些规则通常与探针的结构、组成和热力学性质有关
+
+**PNAS 规则**
+
+-   **1**: 检查序列中碱基"A"的比例是否低于28%。
+
+    碱基"A"的含量如果过高，A-T或A-U配对的比例增大，氢键相对较少，会导致序列的二级结构稳定性降低
+
+-   **2**: 检查序列中是否存在连续4个"A"。
+
+    连续的"A"可能会形成不稳定的二级结构
+
+-   **3**: 检查序列中碱基"C"的比例是否在22%-28%之间。
+
+    保持"C"的比例在22%-28%之间可以帮助维持适当的GC含量
+
+-   **4**: 检查序列中是否存在连续4个"C"。
+
+    连续的"C"可能会降低引物的退火效率，连续的"C"可能导致引物的非特异性结合
+
+-   **5**: 检查序列中前11个碱基中的子序列（每连续的6个碱基）是否包含特定的碱基组合（其中"C"的比例超过50%）
+
+```{r}
+# Use of Composition rules described by the PNAS article [ TRUE to use the filter; FALSE to not use this filter]
+PNASfilter <- TRUE
+
+# Numbers of rules to be used (ex to use only rules 1,2 and 4 use c(1,2,4))
+PNASfilterOption <- c(1,2,4)
+```
+
+## GC percentage filter
+
+```{r}
+# Use GC percentage filter
+GCfilter <- TRUE
+
+# GC composition must be between MinGC and MaxGC for the probe to be kept
+MinGC <- 0.4
+MaxGC <- 0.6
+```
+
+## RepeatMasker Filter
+
+-   **RepeatMasker Filter** 是在基因组分析和探针设计过程中使用的一种过滤工具，用于识别并过滤基因组序列中的重复序列
+
+-   重复序列（如简单重复单元或高度冗余的序列）容易与多个基因组位置发生非特异性结合。如果探针或引物包含这些序列，可能导致实验中出现非特异性信号。因此，通过使用RepeatMasker过滤掉这些区域，可以提高探针或引物的特异性
+
+```{r}
+# Use of RepeatMasker Filter
+MaskedFilter <- TRUE
+
+# 设置探针中允许的被标记的核苷酸的最大比例（默认为10%）
+MaxMaskedPercent <- 0.1
+
+# RepeatMasker Command 用于在终端中执行RepeatMasker命令
+# 格式：RepeatMasker路径 选项指令
+
+# 选项指令：
+# -species 选项指定输入序列的物种（使用有效的NCBI分类学物种名称），常用的名称包括human、mouse、rattus等。
+# -pa 4：指定使用的处理器数量
+# -e rmblast：指定使用 RMBlast 作为搜索引擎
+RepeatMaskerCommand <- '../RepeatMasker/RepeatMasker -species human -pa 4 -e rmblast '
+```
+
+**在rstudio-server中的环境变量与终端环境变量不同，所以需要配置rstudio-server中的环境变量**
+
+```{r}
+# RepeatMasker需要用到python环境
+# 配置rstudio -server中的python路径
+# 在终端中which python后粘贴在下面即可
+Sys.setenv(PATH = paste("/home/sunv28/anaconda3/bin", Sys.getenv("PATH"), sep = ":"))
+
+```
+
+## RSEfilter
+
+-   不知道是什么过滤器。作者代码未写。按默认FALSE设置就行
+
+```{r}
+RSEfilter <- FALSE
+```
+
+## Minimum number of probes per transcript
+
+```{r}
+# we recommend that you have at least 24 probes
+minProbePerTranscrit <- 0
+```
+
+# Software installation(optial)
+
+## RepeatMasker installation
+
+#### **安装TRF**
+
+-   TRF（Tandem Repeats Finder）在RepeatMasker安装前必需要提前配置好
+
+-   TRF 是一种生物信息学工具，用于在 DNA 序列中识别 串联重复序列
+
+-   RepeatMasker 主要用于识别其他类型的重复序列（如散布重复），TRF 则专注于串联重复
+
+-   安装TRF`conda install TRF`
+
+-   查看trf路径：`which trf` 记下路径，配置RepeatMasker有用
+
+#### **安装RepeatMasker**
+
+-   RepeatMasker 官网：<https://www.repeatmasker.org/>
+
+-   下载安装包：`wget http://www.repeatmasker.org/RepeatMasker-4.1.6.tar.gz`
+
+-   解压：`tar -xzvf RepeatMasker-4.1.6.tar.gz`
+
+#### **RepeatMasker 环境变量配置**
+
+-   如果 `RepeatMasker` 的安装目录不在 PATH 中，你需要将其添加进去
+
+-   临时环境变量：重启丢失环境变量
+
+    -   `export PATH=$PATH:<RepeatMasker安装路径>`
+
+    -   使更改生效：`source ~/.bashrc`
+
+    -   测试效果：`RepeatMasker -h`
+
+-   永久环境变量：
+
+    -   编辑bashrc文件：`nano ~/.bashrc`
+
+    -   在配置文件中，添加以下内容：
+
+        -   `export PATH="<RepeatMasker安装路径>:$PATH"`
+
+        -   `export REPEATMASKER_DIR="<RepeatMasker安装路径>"`
+
+        -   编辑完成后，保存并退出 (Ctrl + O, 然后 Enter 保存, Ctrl + X 退出)
+
+    -   使更改生效：`source ~/.bashrc`
+
+    -   重启wsl测试效果：`RepeatMasker -h`
+
+#### **安装 RMBlast**
+
+-   RepeatMasker需要序列搜索引擎，以实现输入基因组序列和参考库中序列的比对
+
+-   RMBlast 是 RepeatMasker 的主要序列搜索引擎
+
+-   RMBlast安装：`conda install RMBlast`
+
+-   查看RMBlast路径：`which rmblastn`记下路径，配置RepeatMasker有用
+
+#### **RepBase数据库**
+
+-   RepBase是一个专门用于存储和注释重复序列 的数据库，涵盖了多种生物的基因组，包括人类、植物、动物、真菌、病毒等。
+
+-   下载网站：<https://www.girinst.org/server/RepBase/index.php>
+
+![](%E5%BE%AE%E4%BF%A1%E6%88%AA%E5%9B%BE_20240905191859.png){width="400"}
+
+-   需注册才能下载，非营利性组织可以免费使用，人工审批，需要等待1-2天时间
+
+-   百度网盘分享链接：<https://pan.baidu.com/s/1gNKFvcNLgGkafX1xv_PrMw> 提取码：9v62
+
+-   下载后将其解压到 RepeatMasker 文件夹下。
+
+#### **RepeatMasker配置**
+
+-   进入解压后的目录：`cd RepeatMasker`
+
+-   配置 RepeatMasker：`./configure`
+
+-   执行后，根据提示信息一步步来。
+
+#### **Dfam数据库**
+
+-   Dfam 是一个开源的、以 隐藏马尔可夫模型（HMMs） 为基础的数据库，用于识别和注释基因组中的重复序列，特别是转座子和其他散布重复序列
+
+-   自动下载
+
+    进入：`./configure`选择对应选项下载
+
+-   手动下载
+
+    -   下载地址：<https://www.dfam.org/releases/Dfam_3.8/families/FamDB/>
+
+    -   根据需要下载对应的分区
+
+        ![](%E5%BE%AE%E4%BF%A1%E6%88%AA%E5%9B%BE_20240906172008.png){width="575"}
+
+    -   解压放在 RepeatMasker 的 Libraries 的famdb文件夹下
+
+## package installation
+
+#### **ade4**
+
+多元数据分析和生态数据分析：
+
+-   提供了多种多元统计方法，如主成分分析（PCA）、对应分析（CA）、判别分析（DA）等。
+
+-   特别适用于生态学数据的分析和可视化，可以处理形态数据、基因数据、物种分布数据等。
+
+-   提供了多种工具用于处理因子、距离矩阵、数据表等多种数据结构。
+
+#### **seqinr**
+
+生物序列（如DNA、RNA、蛋白质序列）的分析和处理。
+
+-   提供了读取、写入和处理序列数据的工具，可以处理FASTA、GenBank等格式。
+
+-   计算GC含量、反向互补序列、翻译DNA为蛋白质等序列操作。
+
+-   与在线数据库如GenBank、SwissProt等接口，方便从公共数据库获取生物序列数据。
+
+#### **zoo**
+
+时间序列数据的处理与分析。
+
+-   提供了强大的时间序列对象和工具，用于处理不规则时间序列数据。
+
+-   提供了常用的时间序列函数，如合并、截取、填补缺失值、移动平均等。
+
+```{r}
+# install.packages("ade4")
+# install.packages("seqinr")
+# install.packages("zoo")
+```
+
+# Probe design
+
+## Loading package
+
+```{r}
+# 用于多元数据分析和图形表示
+library(ade4)
+
+# 用于生物序列（如DNA、RNA和蛋白质序列）的分析和操作
+library(seqinr)
+
+# 提供了用于处理不规则时间序列数据的工具
+library(zoo)
+```
+
+## Create output directory based on conditions
+
+```{r}
+# 如果输出目录 FileNameOutput 不存在，则创建该目录。
+if (!file.exists(FileNameOutput)){ dir.create(FileNameOutput) }
+```
+
+## Generate the name of the output file
+
+```{r}
+# 保存过滤后的探针结果txt
+paste(FileNameOutput,"_FILT",".txt",collapse="",sep="") -> ResultFileName
+ResultFileName
+
+# 保存所有探针结果txt
+paste(FileNameOutput,"_ALL",".txt",collapse="",sep="")  -> RawProbesFileName
+RawProbesFileName
+
+# 保存过滤后的探针FASTA
+paste(FileNameOutput,"_FILT_summary",".fasta",collapse="",sep="") -> ResultFastaSummaryFileName
+ResultFastaSummaryFileName
+
+# 保存所有探针的FASTA
+paste(FileNameOutput,"_ALL_summary",".fasta",collapse="",sep="")  -> RawProbesFastaSummaryFileName
+RawProbesFastaSummaryFileName
+```
+
+## Handling Fasta and getting Reverse complementary sequence
+
+### Define functions for obtaining number of gene and transcript
+
+```{r}
+getGandTInfosFromFastaReads <- function(FastaFile) {
+  
+  # 读取FASTA文件中的序列名称，并将其按 "|" 分割为多个部分
+  unlist(strsplit(getName(read.fasta(FastaFile)), split = "[|]")) -> fastafiletmp
+  
+  # 进一步按 "_" 分割上一步得到的序列名称部分
+  unlist(strsplit(fastafiletmp, split = "_")) -> fastafiletmp
+  
+  # 计算并返回唯一基因ID（ENSG）的数量
+  length(unique(fastafiletmp[grep("ENSG", fastafiletmp)])) -> nog
+  
+  # 计算并返回唯一转录本ID（ENST）的数量
+  length(unique(fastafiletmp[grep("ENST", fastafiletmp)])) -> not
+  
+  # 返回基因和转录本的数量，作为函数的输出
+  return(c(genes = nog, transcrits = not))
+}
+```
+
+### If the Fasta file is not Ensembl standard format
+
+```{r}
+# 将工作目录设置为指定的 Fasta 文件路径
+setwd(PathNameFasta)
+
+if (EnsemblFormat == F) {
+  
+  # 读取 Fasta 文件中的序列，只获取序列本身 (seqonly = TRUE)，忽略注释信息
+  read.fasta(FileNameFasta, seqonly = T) -> multifastatmp
+  
+  # 初始化一个空的列表 multifasta，用于存储处理后的序列
+  multifasta <- list()
+  
+  # 遍历 multifastatmp 中的每一条序列
+  for (i in 1:length(multifastatmp)) {
+    
+    # 创建一个临时名称 thetmpname，格式为 "ENSG{i}|ENST{i}"
+    thetmpname <- paste("ENSG", i, "|ENST", i, sep = "")
+    
+    # s2c 将序列转换为字符向量
+    # comp 计算互补序列
+    # rev 将其反向排列，得到反向互补序列。
+    # 使用 as.SeqFastadna 将该反向互补序列转化为 Fasta 序列对象，并添加名称和注释信息
+    c(multifasta, list(as.SeqFastadna(rev(comp(s2c(multifastatmp[[i]]))), 
+                                      name = thetmpname, Annot = thetmpname))) -> multifasta
+  }
+  
+  # 删除中间的临时变量 multifastatmp 以释放内存
+  rm(multifastatmp)
+  
+  # 计算 multifasta 中的基因数量和转录本数量，并将结果存储在 gantinfo 中
+  c(genes = length(multifasta), transcrits = length(multifasta)) -> gantinfo
+}
+```
+
+### If the Fasta file is Ensembl standard format
+
+```{r}
+# 将工作目录设置为指定的 Fasta 文件路径
+setwd(PathNameFasta)
+
+if (EnsemblFormat == T) {
+  
+  # 读取 Fasta 文件中的序列和注释信息
+  read.fasta(FileNameFasta) -> multifastatmp
+  
+  # 初始化一个空的列表 multifasta，用于存储处理后的序列
+  multifasta <- list()
+  
+  # 遍历 multifastatmp 中的每一条序列
+  for (i in 1:length(multifastatmp)) {
+    
+    # comp 计算互补序列
+    # rev 将其反向排列，得到反向互补序列
+    # 使用 as.SeqFastadna 将反向互补后的序列转换为 Fasta 序列对象
+    # 并将原序列名称和注释信息保留
+    # 序列的名称来自 multifastatmp 的名称
+    # 注释信息来自 multifastatmp 中该序列的第一条注释
+    c(multifasta, list(as.SeqFastadna(rev(comp(multifastatmp[[i]])), 
+                                      name = names(multifastatmp)[i], 
+                                      Annot = getAnnot(multifastatmp)[[i]][1]))) -> multifasta
+  }
+  
+  # 删除中间的临时变量 multifastatmp 以释放内存
+  rm(multifastatmp)
+  
+  # 调用 getGandTInfosFromFastaReads 函数，统计基因和转录本数量，并将结果存储在 gantinfo 中
+  getGandTInfosFromFastaReads(FileNameFasta) -> gantinfo
+}
+
+```
+
+### Check the output
+
+```{r}
+# 反向互补序列
+multifasta[[1]][1:20]
+
+# 基因与转录本的数量
+gantinfo
+```
+
+## Find best probe base on dg37 and IncBetwProb
+
+**`IncBetwProb`**: 探针之间的最小间隔（碱基数）
+
+### dG37 setting
+
+```{r}
+# Default dG37
+# 设定ΔG37的范围和步长，并生成一个序列
+ThedG37Min = -36
+ThedG37Max = -28
+ThedG37Step = 0.5
+ThedG37Seq = seq(ThedG37Min,ThedG37Max,ThedG37Step)
+
+# 如果 dG37Desiree 变量不存在，则使用default  ΔG37 序列
+if(!exists("dG37Desiree")){
+  ThedG37SeqTmp <- ThedG37Seq
+}
+# 如果 dG37Desiree 变量存在，则使用它的值来覆盖 ΔG37 序列
+if(exists("dG37Desiree")){
+  ThedG37SeqTmp <- dG37Desiree
+}
+
+ThedG37SeqTmp
+```
+
+### Define a function that returns the position of the maximum value and maximum value
+
+```{r}
+WhichMax <- function(x){
+  # 找到向量中的最大值
+  max(x) -> themax
+  
+  # 找到与最大值相等的所有位置（索引）
+  which(x == themax) -> thesize   
+  
+  # 返回最大值的位置和最大值
+  res <- c(thesize, themax)        
+  
+  # 如果最大值出现多次，则返回 0 和最大值
+  if(length(thesize) >= 2) res <- c(0, themax)
+  return(res)
+}
+```
+
+### Define a function that Calculate the score of dG37
+
+-   默认选择第二个算法，如果想选第一个算法，把第二个给注释掉就好了
+
+#### Verson 1（optical）
+
+-   通过偏差比例计算得分
+
+-   计算中，由于考虑了相对差异，它在差值较小时会给出更高的得分。即使差值稍大，但比例差异不明显时，得分也可能较高
+
+-   **偏差比例**得分通常会相对**宽松**一些
+
+```{r}
+dG37ScoreCalc <- function(ThedG37, DesireddG = -33){
+  # 1. 取绝对值,方便计算
+  ThedG37 <- abs(ThedG37)                
+  DesireddG <- abs(DesireddG)            
+
+  # 2. 计算 实际ΔG37 和期望 ΔG37 的差值：
+  ThedG37 - DesireddG -> tmpcalc          
+
+  # 3. 调整 ΔG37 的值：
+  # 如果差值为正，即实际 ΔG37 大于期望 ΔG37，则计算偏差比例。
+  # 偏差比例计算：(实际 ΔG37 - 期望 ΔG37) / 期望 ΔG37
+  ((ThedG37[tmpcalc >= 0] - DesireddG) / DesireddG) -> ThedG37[tmpcalc >= 0]
+
+  # 如果差值为负，即实际 ΔG37 小于期望 ΔG37，则计算偏差比例。
+  # 偏差比例计算：(期望 ΔG37 - 实际 ΔG37) / 期望 ΔG37
+  ((DesireddG - (ThedG37[tmpcalc < 0])) / DesireddG) -> ThedG37[tmpcalc < 0]
+
+  # 4. 最后，函数返回 1 减去偏差比例。
+  # 这个结果意味着越接近1，表示实际 ΔG37 与期望 ΔG37越接近。
+  return(1 - ThedG37)                     
+}
+
+```
+
+#### Verson 2（optical）
+
+-   通过线性转换计算得分
+
+-   更直接地减少得分，尤其是在差值较大时，得分会显著降低
+
+-   **线性转换**得分通常会相对**严格**一些
+
+```{r}
+dG37ScoreCalc <- function(ThedG37, DesireddG = -33){
+  # 计算ΔG37与期望值之间的差值的绝对值
+  valtemp <- abs(ThedG37 - DesireddG)  
+  
+  # 将差值转换为得分，线性方程得分范围为0到1
+  valnorm <- (-0.1 * valtemp) + 1           
+  return(valnorm)                           
+}
+
+```
+
+#### Test
+
+```{r}
+dG37ScoreCalc(-30,DesireddG = -33)
+```
+
+### Define a function to convert RNA sequence to dG37 value
+
+```{r}
+ConvertRNASeq2DeltaGat37 <- function(RNASeq){
+  # nchar计算字符串的长度，获取RNA序列的长度
+  NbBase = nchar(RNASeq)
+  
+  # 将RNA序列转为大写字母
+  RNASeq <- toupper(RNASeq)                  
+  
+  # 定义所有可能的二联体
+  DimVal  <- c("AA", "AC", "AG", "AT",
+               "CA", "CC", "CG", "CT",
+               "GA", "GC", "GG", "GT",
+               "TA", "TC", "TG", "TT")
+  
+  # 对应每个二联体的ΔG37值
+  dGVal37 <- c(-0.2, -1.5, -0.9, -1.0,      
+               -1.0, -2.2, -1.2, -1.4,
+               -0.8, -2.4, -1.5, -1.0,
+               -0.3, -1.4, -1.0, -0.4)
+  
+  # 创建二联体与ΔG37值的映射表
+  RNADimThermoTable <- data.frame(DimVal, dGVal37)
+  
+  # NbBase-1 表示序列中的二联体数量，因为二联体数量总是比单个碱基的数量少一个。例如，序列 "AGCT" 中有 4 个碱基和 3 个二联体（"AG", "GC", "CT"）。
+  # 定义一个全0的初次化ΔG向量，长度为RNA序列的长度-1
+  rep(0, NbBase-1) -> dG    
+  
+  # 定义一个全rnaseq的dim向量，长度为RNA序列的长度-1
+  rep(RNASeq, NbBase-1) -> dim 
+  
+  # 获取RNA序列中所有二联体
+  substr(dim, start=1:(NbBase-1), stop=2:NbBase) -> dim  
+  
+ # 将二联体与ΔG37值匹配 
+  for(i in 1:length(RNADimThermoTable[,1])){  
+    dG[which(dim == RNADimThermoTable[i,1])] <- RNADimThermoTable[i,2]
+  }
+  
+ # 返回一个包含RNA序列二联体和ΔG37值的数据框
+  theconv <- data.frame(dim, dG)              
+  return(theconv)
+}
+
+```
+
+#### Test
+
+```{r}
+kable(ConvertRNASeq2DeltaGat37(c('ATCGATTTCATA')))
+```
+
+### Define a function to calculate dG37 value of all the ProbeLength
+
+对指定长度（`ProbeLength`）的探针在整个 RNA 序列上进行滑动窗口计算，求得每个窗口内探针的总 ΔG37 值。
+
+**注意：不同长度（`ProbeLength`）ΔG37 值差别很大**
+
+**输入：**
+
+-   `RNASeq`：输入的 RNA 序列。
+
+-   `ProbeLength`：滑动窗口的长度，默认为 31 个碱基。
+
+-   `doiplot` 和 `doihist`：用于控制是否生成绘图或直方图的布尔参数，但在函数中并未使用。
+
+-   `SaltConc`：盐浓度，默认为 0.115 M。
+
+```{r}
+dGCalc.RNA.37 <- function(RNASeq, ProbeLength=31, doiplot=F, doihist=F, SaltConc=0.115){
+  
+  # 初始化一个空的 AlldG 变量
+  AlldG <- NULL
+  
+  # 将RNA序列转换为ΔG37值
+  RNASeqConv <- ConvertRNASeq2DeltaGat37(RNASeq=RNASeq) 
+  
+  # rollapply 是 zoo 包中的函数，用于对数据应用滚动窗口操作
+  # ProbeLength-1 是滑动窗口的大小，因为计算二连体，所以需要-1矫正
+
+  AlldG <- rollapply(RNASeqConv$dG, ProbeLength-1, sum)  
+  
+  # 考虑盐浓度对ΔG37的校正
+  AlldG <- AlldG - ((log(SaltConc)*-0.175)-.2) 
+  
+  # 生成探针长度序列名
+  ProbeLengthseq <- paste(length(dir()), ProbeLength, sep="_")
+  return(AlldG)
+}
+```
+
+#### Test
+
+```{r}
+dGCalc.RNA.37(c('ATCGATTTCATA'), ProbeLength=5, doiplot=F, doihist=F, SaltConc=0.115)
+
+```
+
+### Define a function to chose best probe base on dg37 and IncBetwProb
+
+![](%E5%9B%BE%E7%89%872.png)
+
+-   **Seq**: 输入的 RNA 序列。
+
+-   **MinSizeProbe**: 探针的最小长度，默认为 30 个碱基。
+
+-   **MaxSizeProbe**: 探针的最大长度，默认为 32 个碱基。
+
+-   **Desireddg**: 期望的 ΔG37 值，用于计算得分，默认为 -33。
+
+-   **MinScoreValue**: 探针得分的最小阈值，只有得分高于这个值的探针才会被选取，默认为 0.9。
+
+-   **IncBetwProb**: 探针之间的最小间隔（碱基数），默认为 4。
+
+-   **doiplot, doihist**: 控制是否生成绘图或直方图的布尔参数，但在代码中未使用。
+
+```{r}
+getProbesFromRNAdG37 <- function(Seq, MinSizeProbe=30, MaxSizeProbe=32, Desireddg=-33, MinScoreValue=0.9, IncBetwProb=4, doiplot=F, doihist=F){
+  
+  # 如果输入的 Seq 是多个片断，则将它们转换为大写并拼接成一个完整的序列
+  if(length(Seq) > 1) paste(toupper(Seq), collapse="") -> Seq 
+  
+  # 计算最大最小探针长度的差值
+  DiffSize = MaxSizeProbe - MinSizeProbe                     
+  
+  # 设置一个空的TheTmsTmp变量
+  TheTmsTmp <- NULL
+  
+  
+  ###如果探针长度差值等于0###
+  # 计算最大长度探针的ΔG37值并赋予TheTmsTmp
+  dGCalc.RNA.37(Seq, ProbeLength=MaxSizeProbe, doiplot=doiplot, doihist=doihist) -> TheTmsTmp 
+  
+  # 为TheTmsTmp重命名为为最小探针长度值
+  names(TheTmsTmp) <- MinSizeProbe
+  
+  # 获取探针数量
+  NbofProbes <- length(TheTmsTmp)                         
+  
+  
+  ###如果探针长度差值大于0###
+  # 计算不同长度探针的ΔG37值，并拼接到TheTmsTmp矩阵中
+  # TheTmsTmp列名为不同的探针长度
+  if(DiffSize > 0) {                                         
+    for(i in seq(DiffSize-1, 0, -1)){
+      cbind(dGCalc.RNA.37(Seq, ProbeLength=MinSizeProbe+i, doiplot=doiplot, doihist=doihist)[1:NbofProbes], TheTmsTmp) -> TheTmsTmp 
+    }
+    colnames(TheTmsTmp) <- seq(MinSizeProbe, MaxSizeProbe, 1)
+  }
+  
+  
+
+  # 根据期望的 ΔG37 值计算所有探针的得分
+  dG37ScoreCalc(TheTmsTmp, Desireddg) -> TmScores            
+  
+  
+  
+  # 找到每个相同开始位置探针的最佳得分和长度 
+  if(DiffSize > 0) {
+    # 对每一行应用 WhichMax 函数，找到最大值与最大值位置
+    t(apply(TmScores, 1, WhichMax)) -> BestScores            
+    
+    # 调整探针长度到正确的范围
+    # 因为 BestScores 中的列索引是从1开始的，而实际探针长度是从 MinSizeProbe 开始的
+    # 所以需要通过加上 (MinSizeProbe-1) 来调整长度。
+    BestScores[,1] + (MinSizeProbe-1) -> BestScores[,1]    
+  }
+  else BestScores <- cbind(rep(MinSizeProbe, times=length(TmScores)), TmScores)
+  
+  
+  # 将探针最佳得分长度、最佳得分和探针起始位置组合成BestScores
+  cbind(BestScores, seq(1:length(BestScores[,1]))) -> BestScores  
+  colnames(BestScores) <- c("ProbeSize", "dGScore", "Pos")
+  rownames(BestScores) <- NULL
+  
+  
+  # 过滤出得分超过阈值的探针
+  BestScores[BestScores[,2] >= MinScoreValue,] -> ValidedScores 
+  
+  
+  # TheProbes 初始化为空，用于存储最终挑选出的探针信息
+  TheProbes <- NULL
+  
+  
+  # 有效探针的数量大于3个，才进行后续操作
+  if(length(ValidedScores) > 3){
+    
+    # 按探针起始位置排序
+    ValidedScores[order(ValidedScores[,3]),] -> ValidedScores
+    
+    # Pointeur (指针)初始化为0，用于跟踪已经选择探针的位置
+    Pointeur <- 0
+
+    # 确保探针之间的距离不小于IncBetwProb，并从有效探针中挑选
+    while(Pointeur < (nchar(Seq)) ){
+      
+      # 筛选出 大于指针位置（Pointeur）之后的所有探针，并将其存入 ValiTmp。
+      ValidedScores[ValidedScores[,3] >= Pointeur,] -> ValiTmp
+      
+      # 如果 ValiTmp 中的探针数量大于等于4
+      if(length(ValiTmp) >= 4){
+        
+        # 提取对应的探针序列加在ValiTmp最后一列
+        # start：ValiTmp[1,3]（第一个探针起始位置）
+        # stop：ValiTmp[1,1]（第一个探针长度）-1
+        data.frame(ValiTmp, Seq=substr(Seq, start=ValiTmp[1,3], stop=(ValiTmp[1,3] + ValiTmp[1,1] - 1))) -> ValiTmp
+        
+        # 将第一个探针添加到TheProbes中
+        rbind(TheProbes, ValiTmp[1,]) -> TheProbes
+        
+        # 更新指针位置，跳过当前选择的探针并考虑探针间的最小距离
+        Pointeur <- (ValiTmp[1,3] + ValiTmp[1,1] + IncBetwProb)
+      }
+      
+      # ValiTmp 中的探针数量小于4，将指针设置为超过序列的长度，终止循环
+      else {
+        Pointeur = (nchar(Seq) + 1)
+      }
+    }
+  }
+  # 返回所有选出的探针
+  return(TheProbes)
+}
+```
+
+#### Test
+
+```{r}
+kable(getProbesFromRNAdG37(c('ATCGATTTCATA'), MinSizeProbe=3, MaxSizeProbe=5, Desireddg=-8, MinScoreValue=0.1, IncBetwProb=1, doiplot=F, doihist=F))
+
+```
+
+### Find best probe base on dg37 and IncBetwProb
+
+-   用上面的getProbesFromRNAdG37函数遍历所有序列与不同的理想 ΔG37 值获取探针（表相同位置不同长度最大 ΔG37 值，并过滤出超过阈值的得分，过滤出符合最小间隔的探针）
+
+```{r}
+# 初始化临时存储探针和探针名称的变量
+ProbesTmp <- NULL
+ProbesTmpNames <- NULL
+
+
+# 用遍历所有序列，获取其探针
+for(i in 1:length(multifasta)){
+  # 遍历所有理想 ΔG37 值，获取其探针
+  for(dG37 in ThedG37SeqTmp){
+    list(getProbesFromRNAdG37(multifasta[[i]],
+                              MinSizeProbe = TailleSondeMin,
+                              MaxSizeProbe = TailleSondeMax,
+                              Desireddg = dG37,
+                              MinScoreValue = ScoreMin,
+                              IncBetwProb = DistanceMinInterSonde
+    )) -> ProbesTmpTmp
+    
+    
+    
+    
+    # 生成探针的名称，格式为“rna序列名_dG值”。
+    sprintf("%s_dG%.1f",getName(multifasta[[i]]),dG37) -> probesTmpTmpName
+    
+    # 将生成的探针名称与探针列表组合成一个theMatTmp矩阵
+    cbind(ProbeName=rep(probesTmpTmpName,times=length(ProbesTmpTmp[[1]][,1])),ProbesTmpTmp[[1]]) -> theMatTmp
+    
+    # 将当前生成的探针和探针名称添加到总探针列表 (ProbesTmp) 和探针名称列表 (ProbesTmpNames) 中。
+    c(ProbesTmp,ProbesTmpTmp) -> ProbesTmp
+    c(ProbesTmpNames,probesTmpTmpName) -> ProbesTmpNames
+    names(ProbesTmp) <- ProbesTmpNames
+  }
+}
+
+# 删除临时变量，释放内存
+rm(ProbesTmpTmp)
+rm(probesTmpTmpName)
+rm(theMatTmp)
+rm(ProbesTmpNames)
+```
+
+#### View the result
+
+```{r}
+ProbesTmp[1:2]
+```
+
+## Define a function of GCFilter
+
+-   定义一个函数查给定序列的GC含量是否在指定范围内，并返回True和False
+
+```{r}
+isOk4GCFilter <- function(TheSeq, minGC=0.45, maxGC=0.55){
+  
+  # 将序列转换为小写
+  tolower(TheSeq) -> TheSeq
+  
+  # 初始化一个逻辑变量theVerdict，默认值为FALSE，
+  theVerdict <- FALSE
+  
+  # 使用summary函数获取序列的碱基组成（A、T、C、G的数量），并将结果存储在tmpcompo中。
+  summary(TheSeq)$compo -> tmpcompo
+  
+  # 提取“G”和“C”的数量
+  tmpcompo[names(tmpcompo)=="g"] -> gnb
+  tmpcompo[names(tmpcompo)=="c"] -> cnb
+  
+  # 计算GC含量
+  (gnb + cnb) / summary(TheSeq)$length -> gcComp
+  
+  # 检查GC含量是否在范围内,如果是，则将theVerdict设置为TRUE。
+  if(gcComp <= maxGC & gcComp >= minGC) theVerdict <- TRUE
+  return(theVerdict)
+}
+
+```
+
+## Define a function of PNASFilter
+
+**输入：**
+
+-   **RNASeq**：输入的 RNA 序列。
+
+-   **filtertobeuse**；指定要使用的过滤条件（1到5之间的任意组合）
+
+**输出：**
+
+-   当所有过滤条件都通过的时候返回True，否则返回False。
+
+**过滤条件**：
+
+-   **1**: 调用**isitok4aComp**函数，检查序列中碱基"A"的比例是否低于28%。
+
+-   **2**: 调用**isitok4aStack**函数，检查序列中是否存在连续4个"A"。
+
+-   **3**: 调用**isitok4cComp**函数，检查序列中碱基"C"的比例是否在22%-28%之间。
+
+-   **4**: 调用**isitok4cStack**函数，检查序列中是否存在连续4个"C"。
+
+-   **5**: 调用**isitok4cSpecStack**函数， 检查前11个碱基中的子序列（每连续的6个碱基）是否包含特定的碱基组合（其中"C"的比例超过50%）
+
+```{r}
+isOk4PNASFilter <- function(TheSeq, filtertobeuse = c(1, 2, 3, 4, 5)){
+  isITokwithacomp <- TRUE
+  isITokwithastac <- TRUE
+  isITokwithccomp <- TRUE
+  isITokwithcstac <- TRUE
+  isITokwithcspec <- TRUE
+
+  if(1 %in% filtertobeuse) isITokwithacomp = isitok4aComp(TheSeq);
+  if(2 %in% filtertobeuse) isITokwithastac = isitok4aStack(TheSeq);
+  if(3 %in% filtertobeuse) isITokwithccomp = isitok4cComp(TheSeq);
+  if(4 %in% filtertobeuse) isITokwithcstac = isitok4cStack(TheSeq);
+  if(5 %in% filtertobeuse) isITokwithcspec = isitok4cSpecStack(TheSeq);
+
+  # 逻辑与运算符 & 将多个布尔值组合在一起，只有当所有布尔值都为 TRUE 时，最终的结果才为 TRUE
+  return(isITokwithacomp & isITokwithastac & isITokwithccomp & isITokwithcstac & isITokwithcspec)
+}
+```
+
+### Define a function of isitok4aComp
+
+-   检查序列中碱基"A"的比例是否低于28%，返回True和False
+
+```{r}
+isitok4aComp <- function(theProbeSeq){
+  
+  # 将序列转换为小写
+  tolower(theProbeSeq) -> theProbeSeq
+  
+  # 初始化判断变量
+  theVerdict <- FALSE
+  
+  # 如果 "A" 的比例小于 28%，则将 theVerdict 设置为 TRUE。
+  if((summary(theProbeSeq)$compo[names(summary(theProbeSeq)$compo)=="a"] / summary(theProbeSeq)$length) < 0.28) theVerdict <- TRUE
+  return(theVerdict)
+}
+```
+
+### Define a function of isitok4aStack
+
+-   检查序列中是否存在连续4个"A"，返回True和False
+
+```{r}
+isitok4aStack <- function(theProbeSeq){
+  
+  # 初始化判断变量
+  theVerdict <- FALSE
+  
+  # 将序列转换为大写并合并成字符串
+  probeSeq <- paste(toupper(theProbeSeq),collapse="")
+  
+  # 如果找不到 "AAAA"，即 grep 返回的结果长度为 0，则将 theVerdict 设置为 TRUE
+  if(length(grep("AAAA",probeSeq))==0) theVerdict <- TRUE
+  return(theVerdict)
+}
+```
+
+### Define a function of isitok4cComp
+
+-   检查序列中碱基"C"的比例是否在22%-28%之间。返回TRUE和FALSE。
+
+```{r}
+isitok4cComp <- function(theProbeSeq){
+  
+  # 将序列转换为小写
+  tolower(theProbeSeq) -> theProbeSeq
+  
+  # 初始化判断变量
+  theVerdict <- FALSE
+  
+  # 计算碱基 "C" 的比例
+  (summary(theProbeSeq)$compo[names(summary(theProbeSeq)$compo)=="c"] / summary(theProbeSeq)$length) -> cComp
+  
+  # 碱基 "C" 的比例小于 28% 且大于 22%，将 theVerdict 设置为 TRUE
+  if(cComp < 0.28 & cComp > 0.22) theVerdict <- TRUE
+  return(theVerdict)
+}
+```
+
+### Define a function of isitok4cStack
+
+检查序列中是否存在连续4个"C"，返回True和False
+
+```{r}
+isitok4cStack <- function(theProbeSeq){
+  
+  # 初始化判断变量
+  theVerdict <- FALSE
+  
+  # 将序列转换为大写并合并成字符串
+  probeSeq <- paste(toupper(theProbeSeq),collapse="")
+  
+  # 如果找不到 "CCCC"，即 grep 返回的结果长度为 0，则将 theVerdict 设置为 TRUE
+  if(length(grep("CCCC",probeSeq))==0) theVerdict <- TRUE
+  return(theVerdict)
+}
+```
+
+### Define a function of isitok4cSpecStack
+
+-   isitok4cSpecStack函数用于检查序列中前11个碱基中的子序列（每连续的6个碱基）是否含有超过50%的碱基"C"。如果这些片段的"C"含量不超过50%，返回True和False。
+
+```{r}
+isitok4cSpecStack <- function(theProbeSeq){
+  
+  # 将探针转换为小写
+  tolower(theProbeSeq) -> theProbeSeq
+  
+  # 初始化判断变量
+  theVerdict <- FALSE
+  
+  # 创建一个 6x6 的 posrow矩阵，每行从 1 到 6
+  matrix(rep(times=6,seq(1,6,1)),ncol=6,byrow=T) -> posrow
+  
+  # 创建一个 6x6 的 poscol矩阵，每列从 0 到 5
+  matrix(rep(times=6,seq(0,5,1)),ncol=6,byrow=F) -> poscol
+  
+  # posrow + poscol 矩阵
+  # 第 1 行表示从序列的第 1 个字符（位置 1）开始的长度为 6 的子序列。
+  #     1    2    3    4    5    6  
+  #     2    3    4    5    6    7  
+  #     3    4    5    6    7    8  
+  #     4    5    6    7    8    9  
+  #     5    6    7    8    9   10  
+  #     6    7    8    9   10   11  
+  posrow_poscol=posrow + poscol
+  
+  # 从theProbeSeq 中提取所有可能的 6个碱基长度的子序列，每一行代表一个不同起始位置的6 碱基的子序列。
+  matrix(theProbeSeq[posrow_poscol],ncol=6,byrow=FALSE) -> theprobestartmatrix
+  
+  # 对 theprobestartmatrix 的每一行执行以下操作：
+  apply(theprobestartmatrix,1,function(vectchar){
+    
+    # 计算子序列中各个碱基的数量
+    summary(as.SeqFastadna(vectchar))$compo -> tmpcompo
+    
+    # 获取子序列中碱基 "C" 的数量
+    tmpcompo[names(tmpcompo)=="c"] -> tmpcnb
+    
+    # 返回 "C" 的比例
+    return(tmpcnb / summary(as.SeqFastadna(vectchar))$length)
+  }) -> thecpercent
+  
+  # 检查 thecpercent 中是否存在 "C" 含量超过 50% 的子序列。则将 theVerdict 设置为 TRUE
+  if(length(thecpercent[thecpercent > 0.5])==0) theVerdict <- TRUE
+  return(theVerdict)
+}
+
+```
+
+## Define a function of write the sequence from ProbesTable to a fasta file
+
+-   **`ProbesTable`**: 输入的探针表，包含至少一列名为`Seq`，其中存储了探针的序列。
+
+-   **`filetowrite`**: 输出的文件名，指定将要写入的FASTA文件。
+
+-   **`modetowrite`**: 写入模式，可以是`"w"`（写入）或`"a"`（追加），决定文件的打开方式。
+
+```{r}
+WriteProbes2FastaFileWithoutProbesNames <- function(ProbesTable, filetowrite, modetowrite) {
+  
+  # 将探针序列转换为小写
+  # 将每个序列字符串拆分成单个碱基，结果是一个列表，其中每个元素是一个探针序列的碱基组成的向量
+  Sequences <- strsplit(tolower(ProbesTable$Seq), "")
+  
+  #  生成一个从1到探针数量的序列名称
+  names <- as.character(seq(1:length(ProbesTable$Seq)))
+  
+  # 写入FASTA文件
+  write.fasta(Sequences, names, file.out = filetowrite, open = modetowrite)
+}
+
+```
+
+## Define function of getInfosFromProbeList
+
+getInfosFromProbeList用于判断探针是否在UTR区域，找到探针在RNA序列对应的位置，并应用pansfilter, CGfilter ,RSEfilter，以及探针各种各样的信息的函数
+
+**输入：**
+
+-   **probeListNb**: 指定要处理的探针列表的索引。
+
+-   **ProbeList**: 一个包含多个探针信息的数据框，默认为`ProbesTmp`。
+
+-   **FastaSeqList**: 包含FASTA格式RNA序列的列表，默认为`multifasta`。
+
+**输出：**
+
+-   **theStartPos**: 探针在目标序列中的起始位置。
+
+-   **theEndPos**: 探针在目标序列中的结束位置。
+
+-   **ProbeSize**: 探针的长度。
+
+-   **dG37**: 探针在37°C下的熵值，表示其稳定性。
+
+-   **GCpc**: 探针的GC含量百分比。
+
+-   **GCFilter**: 表示探针是否通过了GC含量过滤器。
+
+    `1`表示不使用GC含量过滤器，或通过GC含量过滤器。
+
+    0表示不通过GC含量过滤器。
+
+-   **aCompFilter**: 表示探针是否通过了aComp过滤器。
+
+    `1`表示通过，`0`表示不通。
+
+-   **aStackFilter**: 表示探针是否通过了aStack过滤器。
+
+    `1`表示通过，`0`表示不通。
+
+-   **cCompFilter**: 表示探针是否通过了cComp过滤器。
+
+    `1`表示通过，`0`表示不通。
+
+-   **cStackFilter**: 表示探针是否通过了cStack过滤器。
+
+    `1`表示通过，`0`表示不通。
+
+-   **cSpecStackFilter**: 表示探针是否通过了cSpecStack过滤器。
+
+    `1`表示通过，`0`表示不通。
+
+-   **NbOfPNAS**: 表示探针通过的PNAS过滤器T和F总和（T为1，F为0，进行相加）
+
+-   **PNASFilter**: 表示探针是否通过了PNAS过滤器。
+
+    `1`表示不使用PNAS过滤器，或通过**所有的PNAS**过滤器。
+
+    只要有一个PNAS过滤器不通过则为0
+
+-   **RSESeqFilter**: 表示探针是否通过了RSE序列过滤器
+
+    `1`表示不使用RSE过滤器。或通过RSE过滤器
+
+    0表示不通过RSE过滤器。
+
+-   **InsideUTR**: 表示探针是否位于UTR区域。
+
+    `1`表示是，`0`表示否。
+
+```{r}
+getInfosFromProbeList <- function(probeListNb, ProbeList = ProbesTmp, FastaSeqList = multifasta) {
+  
+  # 通过用下划线 (_) 分割探针的名称来获得RNA序列名称
+  strsplit(names(ProbeList)[probeListNb], "_") -> SeqNameTmp
+  SeqNameTmp[[1]][1] -> SeqName
+
+  
+  # 如果探针名称中包含"UTR"，则提取UTR开始的位置（UTRPos），并更新SeqName为包含UTR信息的名称
+  if ("UTR" %in% SeqNameTmp[[1]]) {
+    which(match(SeqNameTmp[[1]], "UTR") == 1) -> UTRNamePos
+    SeqNameTmp[[1]][(UTRNamePos + 1)] -> UTRPos
+    paste(c(SeqNameTmp[[1]][1], SeqNameTmp[[1]][UTRNamePos], SeqNameTmp[[1]][(UTRNamePos + 1)]), collapse = "_") -> SeqName
+  }
+
+  # 如果未找到UTR位置，则从RNA序列中获取序列长度，UTRPos=序列长度
+  if (!exists("UTRPos")) {
+    length(getSequence(FastaSeqList[[which(getName(FastaSeqList) == SeqName)]])) -> UTRPos
+  }
+
+  # 初始化各种变量
+  theEndPos <- NULL
+  theStartPos <- NULL
+  theInsideUTR <- NULL
+  thedG37 <- NULL
+  theGC <- NULL
+  theGCFilter <- NULL
+  thePNAS1 <- NULL
+  thePNAS2 <- NULL
+  thePNAS3 <- NULL
+  thePNAS4 <- NULL
+  thePNAS5 <- NULL
+  thePNASFilter <- NULL
+  theRSESeq <- NULL
+
+  # 循环遍历探针列表中的每个探针
+  for (i in 1:length(ProbeList[[probeListNb]][, 1])) {
+    
+    # 获取与当前探针对应的RNA序列长度
+    length(getSequence(FastaSeqList[[which(getName(FastaSeqList) == SeqName)]])) -> seqlength
+    
+   
+    # 计算探针的结束位置和开始位置。
+    # 探针与RNA序列为反向互补
+    # end=序列长度-反向互补序列开始位置+1
+    # Start=end+探针长度
+    (seqlength - ProbeList[[probeListNb]][i, 3] + 1) -> EndPosTmp
+    (EndPosTmp - ProbeList[[probeListNb]][i, 1]) -> StartPosTmp
+
+    
+    # 如果探针end>UTR 的开始位置,表探针在UTR内部。将1赋值给 InsideUTRTmp
+    if (as.integer(EndPosTmp) > as.integer(UTRPos)) {
+      1 -> InsideUTRTmp
+    }
+    # 如果探针end<=UTR 的开始位置,表探针不在UTR内部。将0赋值给 InsideUTRTmp
+    if (as.integer(EndPosTmp) <= as.integer(UTRPos)) {
+      0 -> InsideUTRTmp
+    }
+
+    
+    
+    # 探针是否在UTR内部（1 表示在 UTR 内部，0 表示不在 UTR 内部)添加到theInsideUT
+    c(theInsideUTR, InsideUTRTmp) -> theInsideUTR
+    
+    # 探针的结束位置添加到theEndPos
+    c(theEndPos, EndPosTmp) -> theEndPos
+    
+    # 探针的开始位置添加到theStartPos
+    c(theStartPos, StartPosTmp) -> theStartPos
+    
+    # 探针的dG37,探针的长度添加到thedG37
+    c(thedG37, dGCalc.RNA.37(as.character(ProbeList[[probeListNb]][i, 4]), ProbeLength = (EndPosTmp - StartPosTmp))) -> thedG37
+    
+    # 探针的GC含量添加到theGC
+    c(theGC, GC(s2c(as.character(ProbeList[[probeListNb]][i, 4])))) -> theGC
+
+    # 将探针的序列转换为fasta格式存储在seqInFastaForm
+    as.SeqFastadna(s2c(tolower(as.character(ProbeList[[probeListNb]][i, 4])))) -> seqInFastaForm
+
+    
+    # 应用GC过滤器
+    # GCfilter=F(不应用GC过滤器)，将1放置在theGCFilter
+    if (GCfilter) {
+      c(theGCFilter, isOk4GCFilter(seqInFastaForm, minGC = MinGC, maxGC = MaxGC)) -> theGCFilter
+    } else if (!GCfilter) {
+      c(theGCFilter, 1) -> theGCFilter
+    }
+
+    
+    # 应用PNAS过滤器
+    # PNASfilter=F(不应用PNAS过滤器)，将1放置在thePNASFilter
+    c(thePNAS1, isitok4aComp(seqInFastaForm)) -> thePNAS1
+    c(thePNAS2, isitok4aStack(seqInFastaForm)) -> thePNAS2
+    c(thePNAS3, isitok4cComp(seqInFastaForm)) -> thePNAS3
+    c(thePNAS4, isitok4cStack(seqInFastaForm)) -> thePNAS4
+    c(thePNAS5, isitok4cSpecStack(seqInFastaForm)) -> thePNAS5
+
+    if (PNASfilter) {
+      c(thePNASFilter, isOk4PNASFilter(seqInFastaForm, filtertobeuse = PNASfilterOption)) -> thePNASFilter
+    } else if (!PNASfilter) {
+      c(thePNASFilter, 1) -> thePNASFilter
+    }
+
+    
+    # 应用RSE过滤器
+    # RSEfilter=F(不应用RSE过滤器)，将1放置在theRSESeq
+    if (RSEfilter) {
+      c(theRSESeq, isOk4RSESeqFilter(seqInFastaForm, theRSESeqs = RSESeq)) -> theRSESeq
+    } else if (!RSEfilter) {
+      c(theRSESeq, 1) -> theRSESeq
+    }
+  }
+
+  
+  # 计算PNAS总和
+  # TRUE和FALSE相加
+  # TRUE被转换为1
+  # FALSE被转换为0
+  (thePNAS1 + thePNAS2 + thePNAS3 + thePNAS4 + thePNAS5) -> thePNASSum
+
+  
+  # 删除UTRPos变量
+  rm("UTRPos")
+
+  # 返回探针的详细信息
+  # 在 R 中，布尔值 TRUE 和 FALSE 在与数值结合时会自动转换为 1 和 0
+  return(cbind(theStartPos, theEndPos, ProbeSize = (theEndPos - theStartPos), dG37 = thedG37, GCpc = theGC, GCFilter = theGCFilter, aCompFilter = thePNAS1, aStackFilter = thePNAS2, cCompFilter = thePNAS3, cStackFilter = thePNAS4, cSpecStackFilter = thePNAS5, NbOfPNAS = thePNASSum, PNASFilter = thePNASFilter, RSESeqFilter = theRSESeq, InsideUTR = theInsideUTR))
+}
+
+```
+
+## Using getInfosFromProbeList with Probes
+
+-   对不同期望dg37的探针遍历getInfosFromProbeList函数，并将将期望dg37、探针名称和探针信息组合成一个数据框
+
+```{r}
+# 初始化一个空列表 AllProbesWithInfo，用于存储所有处理后的探针信息。
+list()->AllProbesWithInfo
+
+
+# 对 ProbesTmp 中的每个探针列表(不同期望dg37)进行循环处理。
+for (aprobelistnb in 1:length(ProbesTmp)){
+  
+  # 获取当前探针列表中探针的数量
+  NbOfProbes <- length(ProbesTmp[[aprobelistnb]][,1])
+  
+  # 将探针列表的名称拆分为两个部分：基因名称和期望dg37。
+  strsplit(names(ProbesTmp)[aprobelistnb],"_dG") -> GAndTNamesTmp
+  
+  # 将期望dg37赋予dGBaseScore
+  GAndTNamesTmp[[1]][2] -> dGBaseScore
+  
+  # 将基因名称复制一定的次数（当前探针列表中探针的数量）的赋予ProbesNames
+  rep(GAndTNamesTmp[[1]][1],length(ProbesTmp[[aprobelistnb]][,1]))->ProbesNames
+  
+  # 将期望dg37复制一定的次数（当前探针列表中探针的数量）的赋予dGOpt 
+  rep(GAndTNamesTmp[[1]][2],length(ProbesTmp[[aprobelistnb]][,1]))->dGOpt
+  
+  # 运行getInfosFromProbeList函数，得到ProbesTmpInfo
+  getInfosFromProbeList(aprobelistnb,ProbeList=ProbesTmp,FastaSeqList=multifasta) -> ProbesTmpInfo
+  
+  # 将期望dg37、探针名称和探针信息组合成一个数据框
+  c(AllProbesWithInfo,list(cbind(dGOpt,ProbesNames,ProbesTmpInfo[,1:3],ProbesTmp[[aprobelistnb]][,c(4,2)],ProbesTmpInfo[,c(4:15)]))) -> AllProbesWithInfo
+}
+```
+
+#### View the result
+
+```{r}
+# 查看第一个期望dG37前15个探针
+# 使用 kable 创建表格，并为表格添加样式
+kable(AllProbesWithInfo[[1]][1:15, ]) %>%
+  kable_styling("striped", full_width = F) %>%  # 添加条纹样式并设置表格宽度为自适应
+  scroll_box(width = "100%", height = "400px") %>%  # 创建一个可滚动的框，设置宽度和高度
+  column_spec(1:ncol(AllProbesWithInfo[[1]][1:10, ]),  # 选择所有列进行样式设置
+              border_left = F,  # 在每列左侧添加边框
+              border_right = F,  # 在每列右侧添加边框
+              width = "6em")  # 调整每列的宽度为6em
+
+```
+
+## Select the the best dG37
+
+![](%E5%9B%BE%E7%89%873.png)
+
+```{r}
+
+# 如果dG37Desiree不纯在（未设置期望dG37），执行以下代码
+if(!exists("dG37Desiree")){
+  
+  # 初始化一个空变量 AllGenePassedProbesNb，用于存储每个RNA序列在不同期望dG37 条件下通过所有过滤器的探针数量
+  AllGenePassedProbesNb <- NULL
+  
+  
+  # 外循环：遍历每个RNA序列
+  for (genesnb in 1:(length(AllProbesWithInfo)/length(ThedG37SeqTmp))){
+    
+    # 初始化一个空变量 GenePassedProbes，用于存储当前RNA序列在不同期望dG37 条件下通过所有过滤器的探针数量
+    GenePassedProbes <- NULL
+    
+    # 内循环遍历每个期望dG37值。
+    for(dGnb in 1:length(ThedG37SeqTmp)){
+      
+      # 把当前RNA序列当前期望dG37的探针赋予AllPTmp
+      AllProbesWithInfo[[dGnb+(length(ThedG37SeqTmp)*(genesnb-1))]] -> AllPTmp
+      
+      # 计算通过所有三个过滤器（GC、PNAS、RSE）的探针数量（加起来=3），并存储在 NbOfPassedProbes 中。
+      length(which((AllPTmp$GCFilter + AllPTmp$PNASFilter + AllPTmp$RSESeqFilter) == 3)) -> NbOfPassedProbes
+      
+      # 将当前期望dG37值下的通过的探针数量逐列添加到 GenePassedProbes。
+      c(GenePassedProbes,NbOfPassedProbes) -> GenePassedProbes
+    }
+    # 将当前RNA序列通过过滤器的探针数量逐行添加到 AllGenePassedProbesNb 中
+    rbind(AllGenePassedProbesNb,GenePassedProbes) -> AllGenePassedProbesNb
+  }
+  
+  
+  # 根据每个RNA序列不同期望dg37的探针数目与minProbePerTranscrit（设置的最小探针数目）比较，生成一个逻辑矩阵
+  (AllGenePassedProbesNb >= minProbePerTranscrit) -> AllGenePassedProbes
+  
+  # 计算每个期望dG37值下通过minProbePerTranscrit的RNA序列数量，存储在 NbofTranscWithEnoughProbes。
+  apply(AllGenePassedProbes,2,sum) -> NbofTranscWithEnoughProbes
+  
+  # 计算每个期望dG37值下的探针总数，存储在 NbofProbesForAllTranscrit 中
+  apply(AllGenePassedProbesNb,2,sum) -> NbofProbesForAllTranscrit
+  
+  # 找到每个期望dG37值下通过minProbePerTranscrit的RNA序列最大数目对应的索引 theMaxRank。
+  which(NbofTranscWithEnoughProbes==max(NbofTranscWithEnoughProbes)) -> theMaxRank
+  
+  # 在theMaxRank的基础上，找到探针总数最多的期望dG37对应的索引
+  which(NbofProbesForAllTranscrit==max(NbofProbesForAllTranscrit[theMaxRank])) -> theMaxRank
+  
+  
+  # 如果 theMaxRank 的长度为偶数，选择中间的 dG37 值作为 theGooddG37Val。
+  if(length(theMaxRank)%%2==0){
+    ThedG37Seq[theMaxRank[length(theMaxRank)/2]] -> theGooddG37Val
+  
+  # 如果 theMaxRank 的长度为奇数，选择中位数对应的 dG37 值作为 theGooddG37Val
+  }else{
+    ThedG37Seq[theMaxRank[which(theMaxRank==median(theMaxRank))]] -> theGooddG37Val
+  }
+  
+  
+  # 初始化一个空列表，用于存储最终选择的探针集合
+  TheSelecteddGProbes <- list()
+  
+  # 找到最优的期望dG37对应的索引
+  which(ThedG37Seq==theGooddG37Val) -> TheDesireedG37SeqNb
+  
+  
+  # 遍历每个RNA序列
+  for (genesnb in 1:(length(AllProbesWithInfo)/length(ThedG37Seq))){
+    
+    # 根据最优的期望dG37，从 AllProbesWithInfo 中提取相应的探针集合
+    AllProbesWithInfo[[TheDesireedG37SeqNb+(length(ThedG37Seq)*(genesnb-1))]] -> AllPTmp
+    
+    # 将当前RNA序列提取的探针集合添加到 TheSelecteddGProbes 列表中。
+    c(TheSelecteddGProbes,list(AllPTmp)) -> TheSelecteddGProbes
+  }
+}
+
+
+if(exists("dG37Desiree")){
+  AllProbesWithInfo -> TheSelecteddGProbes
+}
+```
+
+#### View the result
+
+```{r}
+# 使用 kable 创建表格，并为表格添加样式
+kable(TheSelecteddGProbes[[1]]) %>%
+  kable_styling("striped", full_width = F) %>%  # 添加条纹样式并设置表格宽度为自适应
+  scroll_box(width = "100%", height = "100%") # 创建一个可滚动的框，设置宽度和高度
+```
+
+## RepeatMasker Filter
+
+-   启用RepeatMasker 对最佳的期望dg37的探针的重复序列进行标记，计算重复序列的百分比。
+
+-   标记百分比小于指定的最大标记百分比MaxMaskedPercent，则RepeatMaskerFilter为1，否则为0
+
+-   如果纯在重复序列，则会生成 **.masked** 文件，其重复序列的碱基由原来的AGCT变为N
+
+    ![](%E5%9B%BE%E7%89%874.png){width="670"}
+
+```{r}
+# 如果启用RepeatMaskedFilter，执行以下代码
+if(MaskedFilter){
+  
+  # 创建一个临时储存探针的文件TheRepeatMaskerTmpFile.fasta
+  TmpSaveFileName <- "TheRepeatMaskerTmpFile.fasta"
+  
+  # 设置到输出路径
+  setwd(FileNameOutput)
+  
+  # 将最佳期望dg37探针合成一个表格，写入TheRepeatMaskerTmpFile.fasta
+  WriteProbes2FastaFileWithoutProbesNames(as.data.frame(do.call(rbind, TheSelecteddGProbes)),TmpSaveFileName,"w")
+  
+  #返回上一级路径
+  setwd("..")
+  
+  # 对终端执行RepeatMasker命令
+  # PathNameFasta和FileNameOutput分别是输入文件的路径和输出文件名。
+  # wait=T表示等待命令执行完成后再继续执行后续代码。
+  system(paste(RepeatMaskerCommand,PathNameFasta,"/",FileNameOutput,"/",TmpSaveFileName,collapse='',sep=''),wait=T)
+  
+  
+  # 如果有重复序列RepeatMasker会生成.masked 文件。
+  # 检查输出路径是否生成了 .masked 文件.
+  if(file.exists(paste(PathNameFasta,"/",FileNameOutput,"/",TmpSaveFileName,".masked",collapse='',sep=''))){
+    
+    # 读取 .masked 文件。
+    read.fasta(paste(PathNameFasta,"/",FileNameOutput,"/",TmpSaveFileName,".masked",collapse='',sep='')) -> maskedfastaprobes
+    
+    # 初始化一个空变量theNmaskedPC，用于存储每个序列中被标记的碱基百分比（PC即Percent Coverage
+    theNmaskedPC <- NULL
+    
+    # 遍历maskedfastaprobes列表中的每个序列
+    for (indice in 1 : length(maskedfastaprobes)){
+      
+      # 获取当前序列并存储在seqtmp中
+      maskedfastaprobes[[indice]] -> seqtmp
+      
+      # 被标记的碱基在序列中以N显示
+      # 是该序列的总长度-该序列碱基（如A、T、C、G）的数量/该序列的总长度=pc
+      (summary(seqtmp)$length - sum(summary(seqtmp)$compo)) / summary(seqtmp)$length -> npc
+      
+      #将当前序列的pc追加到theNmaskedPC列表中
+      c(theNmaskedPC,npc) -> theNmaskedPC
+    }
+  } 
+  
+  #  如果没有生成 .masked 文件，默认将pc=0追加到theNmaskedPC列表中
+  else {
+    as.data.frame(do.call(rbind, TheSelecteddGProbes)) -> maskedfastaprobes
+    rep(0,length(maskedfastaprobes[,2])) -> theNmaskedPC
+  }
+  
+  
+  # 初始化一个空变量，用于存储整合了RepeatMasker结果的探针数据。
+  TheSelecteddGProbesWithRepeatMasker <- NULL
+  
+  # 初始化一个计数器aSimpleCounter，用于追踪当前正在处理的探针在RepeatMasker结果中的索引范围。
+  aSimpleCounter <- 1
+  
+  # 遍历TheSelecteddGProbes中的每个RNA序列
+  for(TranscritNb in 1:length(TheSelecteddGProbes)){
+    
+    # 获取当前计数器
+    fromRMPC <- aSimpleCounter
+    
+    # toRMPC存储当前RNA序列中探针结束的索引位置
+    toRMPC <- (aSimpleCounter-1) + length(TheSelecteddGProbes[[TranscritNb]]$Seq)
+    
+    # 提取该RNA序列所有探针的pc乘以100，将比例转换为百分数。
+    RepeatMaskerPC <- theNmaskedPC[fromRMPC:toRMPC]*100
+    
+    # 如果标记百分比小于指定的最大标记百分比MaxMaskedPercent，则RepeatMaskerFilter为1，否则为0
+    RepeatMaskerFilter <- as.integer(RepeatMaskerPC < (MaxMaskedPercent*100))
+    
+    # 计算器等于当前RNA序列中探针结束的索引位置+1
+    aSimpleCounter <- toRMPC +1
+    
+    # 将当前RNA序列的探针RepeatMaskerPC和RepeatMaskerFilter追加到TheSelecteddGProbesWithRepeatMasker。
+    c(TheSelecteddGProbesWithRepeatMasker,list(data.frame(TheSelecteddGProbes[[TranscritNb]], RepeatMaskerPC,RepeatMaskerFilter))) -> TheSelecteddGProbesWithRepeatMasker
+  }
+  
+  # 将带有RepeatMasker信息的探针数据更新到TheSelecteddGProbes  
+  TheSelecteddGProbesWithRepeatMasker -> TheSelecteddGProbes
+}
+```
+
+#### View the result
+
+```{r}
+# 使用 kable 创建表格，并为表格添加样式
+kable(TheSelecteddGProbes[[1]]) %>%
+  kable_styling("striped", full_width = F) %>%  # 添加条纹样式并设置表格宽度为自适应
+  scroll_box(width = "100%", height = "100%") # 创建一个可滚动的框，设置宽度和高度
+```
+
+## Connect the probe to the FLAP SEQ
+
+-   对探针末尾 连接上FLAP SEQ，并按照NbOfPNAS（表示探针通过的PNAS过滤器T和F总和）从大到小排序
+
+```{r}
+# 定义FLAP SEQ
+theFLAPXSEQ = "CCTCCTAAGTTTCGAGCTGGACTCAGTG"
+theFLAPYSEQ = "TTACACTCGGACCTCGTCGACATGCATT"
+theFLAPZSEQ = "CCAGCTTCTAGCATCCATGCCCTATAAG"
+
+
+# 设置一个空的变量，用于储存连接了FLAP的探针
+TheSelecteddGProbesWithSEQS <- NULL
+
+# 遍历循环所有探针
+for(TranscritNb in 1:length(TheSelecteddGProbes)){
+  
+  # 将原探针序列与FLAPXSEQ组成一个表格testtmpseqX
+  cbind(as.character(TheSelecteddGProbes[[TranscritNb]]$Seq),rep(theFLAPXSEQ,length(TheSelecteddGProbes[[TranscritNb]]$Seq))) -> testtmpseqX
+  
+  # 将原探针序列与FLAPYSEQ组成一个表格testtmpseqY
+  cbind(as.character(TheSelecteddGProbes[[TranscritNb]]$Seq),rep(theFLAPYSEQ,length(TheSelecteddGProbes[[TranscritNb]]$Seq))) -> testtmpseqY
+  
+  # 将原探针序列与FLAPZSEQ组成一个表格testtmpseqZ
+  cbind(as.character(TheSelecteddGProbes[[TranscritNb]]$Seq),rep(theFLAPZSEQ,length(TheSelecteddGProbes[[TranscritNb]]$Seq))) -> testtmpseqZ
+  
+  # 将上述表格每行的探针序列和FLAPSEQ拼接成一个字符串
+  HybFlpX <- apply(testtmpseqX,1,paste,collapse="")
+  HybFlpY <- apply(testtmpseqY,1,paste,collapse="")
+  HybFlpZ <- apply(testtmpseqZ,1,paste,collapse="")
+  
+   # 将拼接后的数据与原探针信息一起保存到新的数据列表中
+  c(TheSelecteddGProbesWithSEQS,list(data.frame(TheSelecteddGProbes[[TranscritNb]],HybFlpX,HybFlpY,HybFlpZ))) -> TheSelecteddGProbesWithSEQS
+}
+
+
+# 将每个RNA序列的探针按NbOfPNAS（表示探针通过的PNAS过滤器T和F总和）从大到小排序
+TheSelecteddGProbesWithSEQSTot <- TheSelecteddGProbesWithSEQS
+TheSelecteddGProbesSorted <- NULL
+for(TranscritNb in 1:length(TheSelecteddGProbesWithSEQSTot)){
+  c(TheSelecteddGProbesSorted,list(TheSelecteddGProbesWithSEQSTot[[TranscritNb]][
+    order(-TheSelecteddGProbesWithSEQSTot[[TranscritNb]]$NbOfPNAS)
+    ,])) -> TheSelecteddGProbesSorted
+}
+TheSelecteddGProbesSorted -> TheSelecteddGProbesWithSEQSTot
+```
+
+#### View the result
+
+```{r}
+# 使用 kable 创建表格，并为表格添加样式
+kable(TheSelecteddGProbesWithSEQSTot[[1]]) %>%
+  kable_styling("striped", full_width = F) %>%  # 添加条纹样式并设置表格宽度为自适应
+  scroll_box(width = "100%", height = "100%") # 创建一个可滚动的框，设置宽度和高度
+```
+
+# Save Results
+
+## Save the raw probes result
+
+-   将最佳期望dg37的所有探针信息保存为RawProbesFileName(Probes_基因名_ALL.txt)
+
+-   将最佳期望dg37的所有探针FASTA保存为RawProbesFastaSummaryFileName(Probes_基因名_ALL_summary.fasta)，用于后期的nblast，其格式如下：
+
+    ![](%E5%9B%BE%E7%89%875.png){width="582"}
+
+```{r}
+# 设置输出路径
+setwd(FileNameOutput)
+
+# 将所有的RNA探针合并为一个数据框
+dataResultProbesWithSEQSTot <- as.data.frame(do.call(rbind, TheSelecteddGProbesWithSEQSTot))
+
+# 将合并后的数据框写入一个文件，文件名为RawProbesFileName(即为Probes_基因名_ALL.txt)
+write.table(dataResultProbesWithSEQSTot, RawProbesFileName, sep="\t", row.names=F)
+
+# 将数据写为FASTA格式以用于nblast
+# 提取起始位置、结束位置和探针名称的列表
+startDum <- as.list(as.character(dataResultProbesWithSEQSTot$theStartPos))
+endDum   <- as.list(as.character(dataResultProbesWithSEQSTot$theEndPos))
+namesDum <- as.list(as.character(dataResultProbesWithSEQSTot$ProbesNames))
+
+# 将探针序列写入FASTA格式文件，每行字符不超过60个字符
+write.fasta(as.list(as.character(dataResultProbesWithSEQSTot$Seq)), 
+            paste(namesDum, startDum, endDum, sep=" "), 
+            nbchar = 60, RawProbesFastaSummaryFileName, open = "w")
+```
+
+#### 查看保存的文件名
+
+```{r}
+RawProbesFileName
+RawProbesFastaSummaryFileName
+```
+
+## Save the filter probes result
+
+-   将最佳dg37探针中全通过GCFilter、PNASFilter和RepeatMaskerFilter(未开启不使用)的探针保存
+
+-   探针信息保存为ResultFileName（Probes_基因名_FILT.txt）
+
+-   探针FASTA保存为ResultFastaSummaryFileName(Probes_基因名_FILT_summary.fasta)，用于后期的nblast，其格式如下：
+
+    ![](%E5%9B%BE%E7%89%875.png){width="582"}
+
+-   如果过滤出来的探针数量小于minProbePerTranscrit（设置的最小探针数量）：
+
+    -   ResultFileName中出现以下提示："Not probes for specified sequence found after filtering. Change filtering parameters or minimum number of probes per transcript"
+
+```{r}
+# 设置输出路径
+setwd(FileNameOutput)
+
+# 初始化一个空列表，用于存储筛选后的探针
+TheFilteredProbes <- NULL
+
+# 遍历每个转录本中的探针
+for(TranscritNb in 1:length(TheSelecteddGProbesWithSEQSTot)){
+  
+  # 如果开启了MaskedFilter，使用GCFilter、PNASFilter和RepeatMaskerFilter
+  # 当所有过滤器通过，AllFilter标为TRUE,否则为FALSE
+  if(MaskedFilter){
+    TheSelecteddGProbesWithSEQSTot[[TranscritNb]]$GCFilter  & 
+    TheSelecteddGProbesWithSEQSTot[[TranscritNb]]$PNASFilter  & 
+    TheSelecteddGProbesWithSEQSTot[[TranscritNb]]$RepeatMaskerFilter -> AllFilter
+  }
+  
+  # 如果未开启MaskedFilter，仅使用GCFilter、PNASFilter
+  # 当所有过滤器通过，AllFilter标为TRUE,否则为FALSE
+  if(!MaskedFilter){
+    TheSelecteddGProbesWithSEQSTot[[TranscritNb]]$GCFilter  & 
+    TheSelecteddGProbesWithSEQSTot[[TranscritNb]]$PNASFilter -> AllFilter
+  }
+
+  # 计算通过过滤的探针数量
+  length(TheSelecteddGProbesWithSEQSTot[[TranscritNb]][AllFilter,]$Seq) -> NbOfGoodProbe
+
+  # 如果通过的探针数量大于或等于minProbePerTranscrit，则将其添加到筛选列表中
+  if(NbOfGoodProbe >= minProbePerTranscrit){
+    c(TheFilteredProbes, list(TheSelecteddGProbesWithSEQSTot[[TranscritNb]][AllFilter,])) -> TheFilteredProbes
+  }
+  
+  # 删除临时变量
+  rm(NbOfGoodProbe)
+}
+
+
+
+# 如果筛选列表没有探针，在ResultFileName（Probes_基因名_FILT.txt）写入提示信息
+if(length(TheFilteredProbes) == 0) {
+  write(x="Not probes for specified sequence found after filtering. Change filtering parameters or minimum number of probes per transcript", 
+        file = ResultFileName)
+  
+} else {
+  
+  # 否则，将筛选后的探针信息合并为一个数据框写入文件ResultFileName（Probes_基因名_FILT.txt）   
+  dataResultProbesFiltered <- as.data.frame(do.call(rbind, TheFilteredProbes))
+  write.table(dataResultProbesFiltered, ResultFileName, sep="\t", row.names=F)
+  
+  
+  # 将筛选后的探针数据写为FASTA格式，供nblast使用
+  # 写入ResultFastaSummaryFileName(Probes_基因名_FILT_summary.fasta)
+  startDum <- as.list(as.character(dataResultProbesFiltered$theStartPos))
+  endDum   <- as.list(as.character(dataResultProbesFiltered$theEndPos))
+  namesDum <- as.list(as.character(dataResultProbesFiltered$ProbesNames))
+  write.fasta(as.list(as.character(dataResultProbesFiltered$Seq)), 
+              paste(namesDum, startDum, endDum, sep=" "), 
+              nbchar = 60, ResultFastaSummaryFileName, open = "w")
+}
+
+
+```
+
+**查看保存的文件名**
+
+```{r}
+ResultFileName
+ResultFastaSummaryFileName
+```
+
+# end
+
+```{r}
+# 打印程序成功结束的提示信息
+cat('\n\n\n=== Oligonstan terminated succesfully. See result folder for identified probes.\n', PathNameFasta)
+
+# 如果开启了MaskedFilter，删除临时的RepeatMasker文件
+if(MaskedFilter) system("rm TheRepeatMaskerTmpFile.*", wait=T)
+
+# 清除所有变量，释放内存
+rm(list = ls())
+```
